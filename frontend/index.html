@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forensic Scan — Image Tampering Detection</title>
+<style>
+  :root{
+    --bg: #0b0d0c;
+    --panel: #131615;
+    --line: #23281f;
+    --ink: #e8ede4;
+    --dim: #8b9585;
+    --evidence: #ff5a36;
+    --clear: #6fcf97;
+    --mono: 'JetBrains Mono', 'Courier New', monospace;
+  }
+  @font-face {
+    font-family: 'JetBrains Mono';
+    src: local('JetBrains Mono');
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family: var(--mono);
+    min-height:100vh;
+    padding:40px 20px 80px;
+  }
+  .wrap{max-width:760px; margin:0 auto;}
+
+  header{ margin-bottom:36px; border-bottom:1px solid var(--line); padding-bottom:20px;}
+  .eyebrow{ color:var(--evidence); font-size:12px; letter-spacing:.18em; text-transform:uppercase; margin-bottom:10px;}
+  h1{ font-size:26px; font-weight:600; letter-spacing:-0.01em; }
+  .sub{ color:var(--dim); font-size:13px; margin-top:8px; line-height:1.5; max-width:52ch;}
+
+  .dropzone{
+    border:1px dashed var(--line);
+    background:var(--panel);
+    border-radius:2px;
+    padding:48px 20px;
+    text-align:center;
+    cursor:pointer;
+    transition: border-color .15s ease, background .15s ease;
+    position:relative;
+  }
+  .dropzone:hover, .dropzone.drag{ border-color:var(--evidence); background:#161a15;}
+  .dropzone input{ display:none;}
+  .dz-icon{ font-size:11px; color:var(--dim); letter-spacing:.14em; text-transform:uppercase;}
+  .dz-main{ font-size:15px; margin-top:10px;}
+  .dz-main span{ color:var(--evidence); text-decoration:underline; text-underline-offset:3px;}
+
+  #previewRow{ display:none; gap:16px; margin-top:20px;}
+  #previewRow.show{ display:grid; grid-template-columns:1fr 1fr;}
+  .imgcard{ border:1px solid var(--line); background:var(--panel); padding:10px;}
+  .imgcard img{ width:100%; display:block; filter:grayscale(0.1);}
+  .imgcard .label{ font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--dim); margin-top:8px;}
+
+  .scanbar{
+    display:none; margin-top:20px; font-size:12px; color:var(--dim);
+    align-items:center; gap:10px;
+  }
+  .scanbar.show{ display:flex;}
+  .dot{ width:6px; height:6px; background:var(--evidence); border-radius:50%; animation:pulse 1s infinite ease-in-out;}
+  @keyframes pulse{ 50%{ opacity:.2; } }
+
+  #result{ display:none; margin-top:28px;}
+  #result.show{ display:block;}
+
+  .verdict{
+    border:1px solid var(--line);
+    background:var(--panel);
+    padding:22px 24px;
+    display:flex; justify-content:space-between; align-items:baseline;
+    border-left:3px solid var(--clear);
+  }
+  .verdict.tampered{ border-left-color:var(--evidence);}
+  .verdict .label{ font-size:20px; font-weight:700; letter-spacing:-0.01em;}
+  .verdict.tampered .label{ color:var(--evidence);}
+  .verdict:not(.tampered) .label{ color:var(--clear);}
+  .verdict .conf{ font-size:13px; color:var(--dim);}
+  .verdict .conf b{ color:var(--ink); font-size:15px;}
+
+  .evidence-list{ margin-top:18px;}
+  .ev-row{ margin-bottom:14px;}
+  .ev-head{ display:flex; justify-content:space-between; font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px;}
+  .ev-head b{ color:var(--ink); font-weight:600;}
+  .ev-track{ height:4px; background:var(--line); position:relative;}
+  .ev-fill{ height:100%; background:var(--evidence); width:0%; transition:width .6s ease;}
+
+  .ela-section{ margin-top:24px;}
+  .ela-section .label{ font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--dim); margin-bottom:8px;}
+  .ela-section img{ width:100%; border:1px solid var(--line);}
+  .ela-note{ font-size:12px; color:var(--dim); margin-top:8px; line-height:1.5;}
+
+  .config{ margin-top:40px; font-size:11px; color:var(--dim); border-top:1px solid var(--line); padding-top:16px;}
+  .config input{ background:var(--panel); border:1px solid var(--line); color:var(--ink); font-family:var(--mono); font-size:11px; padding:4px 8px; width:220px;}
+
+  .err{ display:none; margin-top:16px; color:var(--evidence); font-size:13px; border:1px solid var(--evidence); padding:12px 14px;}
+  .err.show{display:block;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Forensic Scan / v1.0</div>
+    <h1>Image Tampering Detection</h1>
+    <p class="sub">Upload a photo. The API recompresses it, diffs it against itself, and checks noise and edge statistics for the fingerprints a copy-paste or splice leaves behind.</p>
+  </header>
+
+  <div class="dropzone" id="dropzone">
+    <input type="file" id="fileInput" accept="image/png, image/jpeg, image/webp">
+    <div class="dz-icon">Drop file / click to upload</div>
+    <div class="dz-main"><span>Choose an image</span> or drag it here — JPEG, PNG, WEBP</div>
+  </div>
+
+  <div id="previewRow">
+    <div class="imgcard"><img id="previewImg" alt="uploaded image"><div class="label">Uploaded image</div></div>
+    <div class="imgcard" id="elaCard" style="display:none;"><img id="elaImg" alt="ELA map"><div class="label">Error Level Analysis</div></div>
+  </div>
+
+  <div class="scanbar" id="scanbar"><span class="dot"></span> Running forensic analysis…</div>
+
+  <div class="err" id="errBox"></div>
+
+  <div id="result">
+    <div class="verdict" id="verdict">
+      <div class="label" id="verdictLabel">—</div>
+      <div class="conf">confidence <b id="confVal">—</b></div>
+    </div>
+
+    <div class="evidence-list">
+      <div class="ev-row">
+        <div class="ev-head"><span>ELA hot-region</span><b id="evEla">—</b></div>
+        <div class="ev-track"><div class="ev-fill" id="evElaFill"></div></div>
+      </div>
+      <div class="ev-row">
+        <div class="ev-head"><span>Noise inconsistency</span><b id="evNoise">—</b></div>
+        <div class="ev-track"><div class="ev-fill" id="evNoiseFill"></div></div>
+      </div>
+      <div class="ev-row">
+        <div class="ev-head"><span>Edge artifact score</span><b id="evEdge">—</b></div>
+        <div class="ev-track"><div class="ev-fill" id="evEdgeFill"></div></div>
+      </div>
+    </div>
+
+    <div class="ela-note">The ELA panel above lights up regions that were re-compressed at a different rate than the rest of the frame — a common signature of pasted-in or re-touched content.</div>
+  </div>
+
+  <div class="config">
+    API endpoint: <input id="apiUrl" value="http://127.0.0.1:8000/predict">
+  </div>
+</div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const previewRow = document.getElementById('previewRow');
+const previewImg = document.getElementById('previewImg');
+const elaCard = document.getElementById('elaCard');
+const elaImg = document.getElementById('elaImg');
+const scanbar = document.getElementById('scanbar');
+const result = document.getElementById('result');
+const errBox = document.getElementById('errBox');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) handleFile(fileInput.files[0]);
+});
+
+function handleFile(file){
+  errBox.classList.remove('show');
+  result.classList.remove('show');
+  elaCard.style.display = 'none';
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    previewImg.src = e.target.result;
+    previewRow.classList.add('show');
+  };
+  reader.readAsDataURL(file);
+
+  runPrediction(file);
+}
+
+async function runPrediction(file){
+  scanbar.classList.add('show');
+  const apiUrl = document.getElementById('apiUrl').value.trim();
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch(apiUrl, { method: 'POST', body: formData });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Request failed (${res.status})`);
+    }
+    const data = await res.json();
+    renderResult(data);
+  } catch (err) {
+    errBox.textContent = 'Could not reach the API — ' + err.message +
+      '. Make sure the backend is running (see README) and the endpoint above is correct.';
+    errBox.classList.add('show');
+  } finally {
+    scanbar.classList.remove('show');
+  }
+}
+
+function renderResult(data){
+  const verdict = document.getElementById('verdict');
+  const label = document.getElementById('verdictLabel');
+  const conf = document.getElementById('confVal');
+
+  const isTampered = data.prediction === 'Tampered';
+  verdict.classList.toggle('tampered', isTampered);
+  label.textContent = data.prediction;
+  conf.textContent = Math.round(data.confidence * 100) + '%';
+
+  const ev = data.evidence;
+  setBar('evEla', 'evElaFill', ev.ela_hot_region_pct, '%');
+  setBar('evNoise', 'evNoiseFill', ev.noise_inconsistency_score * 100, ' /100');
+  setBar('evEdge', 'evEdgeFill', ev.edge_artifact_score * 100, ' /100');
+
+  if (data.ela_visualization_png_base64) {
+    elaImg.src = 'data:image/png;base64,' + data.ela_visualization_png_base64;
+    elaCard.style.display = 'block';
+  }
+
+  result.classList.add('show');
+}
+
+function setBar(labelId, fillId, value, suffix){
+  document.getElementById(labelId).textContent = value.toFixed(1) + suffix;
+  document.getElementById(fillId).style.width = Math.min(value, 100) + '%';
+}
+</script>
+</body>
+</html>
